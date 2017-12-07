@@ -1,7 +1,17 @@
+/**
+ * @author Rajeesh <rajeesh.k@iinerds.com>
+ * @version: 0.3
+ */
+
+
 'use strict'
 
 const jsonQuery = require('json-query');
 var AWS = require('aws-sdk');
+
+/**
+ * Define AWS API version
+ */
 
 AWS.config.apiVersions = {
   cloudformation: '2010-05-15',
@@ -10,29 +20,32 @@ AWS.config.apiVersions = {
 
 var cloudformation = new AWS.CloudFormation();
 var codepipeline = new AWS.CodePipeline();
-var lambda = new AWS.Lambda();
+var apigateway = new AWS.APIGateway();
 
+// Lambda handler start here.
 exports.handler = function(event, context, callback) {
 
+    //Retrieve the CodePipeline ID 
     var jobId = event["CodePipeline.job"].id;
-    //var stackName = event["CodePipeline.job"].data.inputArtifacts[0].name;
 
-    //console.log(stackName);
-    // Retrieve the value of UserParameters from the Lambda action configuration in AWS CodePipeline, in this case a URL which will be
-    // health checked by this function.
+    /**
+     * Retrieve the value of UserParameters from the Lambda action configuration in AWS CodePipeline, in this case a URL which will be
+     * health checked by this function.
+     */
+    var stackName = event["CodePipeline.job"].data.actionConfiguration.configuration.UserParameters; 
+
+    // Define the Cloudformation stack parameters. The processed CF template need to be used.     
     var stackParams = {
-        StackName: 'MyBetaStack3',
+        StackName: stackName || '',
         TemplateStage: 'Processed'
     };
-    
-    // var stackParams = {
-    //     StackName: 'MyBetaStack3',
-    //     TemplateStage: 'Processed'
-    // };
 
+    // REST Api id of the deployed API.
     var restApiIdVal;
 
-    var cfGetTemplate = function(message) {
+    // Define the Success function.
+    var putJobSuccess = function(message) {
+        
         var cpParams = {
             jobId: jobId
         };
@@ -119,6 +132,28 @@ exports.handler = function(event, context, callback) {
                 callback(null, message);
             }    
         });    
-    }    
-    cfGetTemplate('Success');
+    } 
+
+     // Notify AWS CodePipeline of a failed job
+    var putJobFailure = function(message) {
+        var params = {
+            jobId: jobId,
+            failureDetails: {
+                message: JSON.stringify(message),
+                type: 'JobFailed',
+                externalExecutionId: context.invokeid
+            }
+        };
+        codepipeline.putJobFailureResult(params, function(err, data) {
+            context.fail(message);      
+        });
+    };
+
+    // Validate the URL passed in UserParameters
+    if(!stackName) {
+        putJobFailure('The UserParameters field must contain the Stack Name!');  
+        return;
+    }   
+    
+    putJobSuccess('Success');
 };
