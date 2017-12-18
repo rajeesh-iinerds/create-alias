@@ -1,8 +1,9 @@
 /**
  * @author Rajeesh <rajeesh.k@iinerds.com>
  * @version: 0.3
+ * @desc: The Alias creation of backend Lambda is handled by this Lambda. This will create two
+ * aliases as "staging" and "prod" respectively.
  */
-
 
 'use strict'
 
@@ -10,23 +11,22 @@ const jsonQuery = require('json-query');
 var AWS = require('aws-sdk');
 
 /**
- * Define AWS API version
+ * Define AWS API version and intialize the AWS services objects.
  */
-
 AWS.config.apiVersions = {
   cloudformation: '2010-05-15',
+  codepipeline: '2015-07-09',
+  lambda: '2015-03-31'
   // other service API versions
 };
-
 var cloudformation = new AWS.CloudFormation();
 var codepipeline = new AWS.CodePipeline();
-var apigateway = new AWS.APIGateway();
 var lambda = new AWS.Lambda();
 
-// Lambda handler start here.
+// Lambda handler starts here.
 exports.handler = function(event, context, callback) {
 
-    //Retrieve the CodePipeline ID 
+    // Retrieve the CodePipeline ID 
     var jobId = event["CodePipeline.job"].id;
 
     /**
@@ -47,20 +47,32 @@ exports.handler = function(event, context, callback) {
     // Define the Success function.
     var putJobSuccess = function(message) {
         
+       /**
+        * Define the CodePipeline parameters. 
+        * Currently, it requires only the jobId of CodePipeline.
+        */
         var cpParams = {
             jobId: jobId
         };
+        /**
+         * This method is required to call, since it is part of the Invoke type of CodePipeline.
+         */
         codepipeline.putJobSuccessResult(cpParams, function(err, data) {
             if (err) {
                 callback(err);
             }
             else {
+                /**
+                 * Get the processed template of CF. The API and Lambda names are retrieved from there.
+                 */
                 cloudformation.getTemplate(stackParams, function(err, data) {
                     if (err) { 
                         console.log(err, err.stack);
                     }
                     else {
-                        //console.log(util.inspect(data, {depth: null}));
+                        /**
+                         * Get the Processed template of CloudFormation to retrieve the API and Lambda name.
+                         */
                         var templateBody = data.TemplateBody;
                         var jsonTemplate = JSON.parse(templateBody);
                         var functionName = jsonTemplate.Resources.CCTFunction.Properties.FunctionName;
@@ -73,22 +85,33 @@ exports.handler = function(event, context, callback) {
                             Role: "arn:aws:iam::902849442700:role/LambdaFullAccess", 
                         };
 
+                        /**
+                         * Update the API Lambda Role.
+                         */
                         lambda.updateFunctionConfiguration(functionUpdateParams, function(err, data) {
                             if (err) console.log(err, err.stack); // an error occurred
                             else;     //console.log(data);           // successful response
                         });    
-                        //console.log(functionName);
-                        
+                       
+                        /**
+                         * Define the "staging" alias params
+                         */
                         var stagingAliasParams = {
                             FunctionName: functionName, /* required */
                             Name: 'staging' /* required */
                         };
 
+                        /**
+                         * Define the "prod" alias params
+                         */
                         var prodAliasParams = {
                             FunctionName: functionName, /* required */
                             Name: 'prod' /* required */
                         };
 
+                        /**
+                         * Define the "staging" alias params for creation.
+                         */
                         var createStagingAliasParams = {
                             FunctionName: functionName, /* required */
                             FunctionVersion: '$LATEST', /* required */
@@ -96,6 +119,9 @@ exports.handler = function(event, context, callback) {
                             Description: 'Staging Alias'
                         };
 
+                        /**
+                         * Define the "prod" alias params for creation.
+                         */
                         var createProdAliasParams = {
                             FunctionName: functionName, /* required */
                             FunctionVersion: '$LATEST', /* required */
@@ -103,6 +129,10 @@ exports.handler = function(event, context, callback) {
                             Description: 'Production Alias'
                         };
 
+                        /**
+                         * Get the current "staging" alias.
+                         * If the Alias is null, then create the Alias.
+                         */
                         lambda.getAlias(stagingAliasParams, function(err, data) {
                             if (err) console.log(err, err.stack);
                             else
@@ -116,6 +146,10 @@ exports.handler = function(event, context, callback) {
                             ;    
                         });
 
+                        /**
+                         * Get the current "prod" alias.
+                         * If the Alias is null, then create the Alias.
+                         */
                         lambda.getAlias(prodAliasParams, function(err, data) {
                             if (err) console.log(err, err.stack);
                             else 
@@ -135,9 +169,9 @@ exports.handler = function(event, context, callback) {
         });    
     } 
 
-     // Notify AWS CodePipeline of a failed job
+    // Notify AWS CodePipeline of a failed job
     var putJobFailure = function(message) {
-        var params = {
+        var failParams = {
             jobId: jobId,
             failureDetails: {
                 message: JSON.stringify(message),
@@ -145,16 +179,18 @@ exports.handler = function(event, context, callback) {
                 externalExecutionId: context.invokeid
             }
         };
-        codepipeline.putJobFailureResult(params, function(err, data) {
+
+        codepipeline.putJobFailureResult(failParams, function(err, data) {
             context.fail(message);      
         });
     };
 
-    // Validate the URL passed in UserParameters
+    // Validate StackName passed in UserParameters.
     if(!stackName) {
         putJobFailure('The UserParameters field must contain the Stack Name!');  
         return;
     }   
     
+    // All good stuff start here.
     putJobSuccess('Success');
 };
